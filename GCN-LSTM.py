@@ -66,14 +66,14 @@ def normalize_adjacency_matrix(A):
     torch.Tensor: 归一化后的邻接矩阵 A_hat (N, N)
     """
     # 1. 创建 A_tilde = A + I
-    A_tilde = A + torch.eye(A.shape, device=A.device)
+    A_tilde = A + torch.eye(A.shape[0], device=A.device)
     
     # 2. 计算度矩阵 D_tilde 的逆平方根
     degrees = torch.sum(A_tilde, dim=1)
     D_inv_sqrt = torch.pow(degrees, -0.5)
     
     # 3. 处理孤立节点（度为0），防止出现inf 
-    D_inv_sqrt = 0.0
+    D_inv_sqrt[torch.isinf(D_inv_sqrt)] = 0.0
     
     # 4. 创建对角矩阵 D_inv_sqrt_matrix
     D_inv_sqrt_matrix = torch.diag(D_inv_sqrt)
@@ -133,7 +133,7 @@ class GCN_LSTM_Classifier(nn.Module):
         x 形状: (Batch, T=140, N=116)
         adj_hat 形状: (N=116, N=116)
         """
-        B = x.shape # Batch size
+        B = x.shape[0] # Batch size
         
         # --- 1. GCN 空间特征提取 (在每个时间点上) ---
         
@@ -193,8 +193,8 @@ class fMRISpatioTemporalDataset(Dataset):
     def __init__(self, X_data, y_data):
         # X_data 应为 (NumSubjects, T=140, N=116)
         # y_data 应为 (NumSubjects,)
-        self.X = torch.tensor(X_data, dtype=torch.float32)
-        self.y = torch.tensor(y_data, dtype=torch.long)
+        self.X = X_data
+        self.y = y_data
 
     def __len__(self):
         return len(self.y)
