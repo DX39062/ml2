@@ -210,8 +210,8 @@ def train_epoch(model, loader, criterion, optimizer, adj_hat, device):
     """ 单个epoch的训练循环 """
     model.train()  # 设置为训练模式 
     running_loss = 0.0
-    all_preds = []   # <-- 已更正
-    all_labels = []  # <-- 已更正
+    all_preds = []
+    all_labels = []
 
     for X_batch, y_batch in loader:
         X_batch, y_batch = X_batch.to(device), y_batch.to(device)
@@ -240,8 +240,8 @@ def validate_epoch(model, loader, criterion, adj_hat, device):
     """ 单个epoch的验证循环 """
     model.eval()  # 设置为评估模式 
     running_loss = 0.0
-    all_preds = []   # <-- 已更正
-    all_labels = []  # <-- 已更正
+    all_preds = []
+    all_labels = []
 
     with torch.no_grad():  # 禁用梯度计算
         for X_batch, y_batch in loader:
@@ -276,60 +276,93 @@ except FileNotFoundError:
     print(f"错误：找不到文件 '{A_data_file}'。请确保文件在脚本目录中。")
     exit()
 
-# --- 5.1.b 加载 标签 (y) ---
+# --- 5.1.b 加载并解析 标签 (y) ---
 y_data_file = 'labels.csv' # <-- 已根据您的请求更新
-# 假设 labels.csv 有一个表头 (例如 'label')
+label_map = {}
 try:
-    y_data_np = pd.read_csv(y_data_file).values.ravel() #.ravel() 将 (N, 1) 转换为 (N,)
-    N_TOTAL_SUBJECTS = len(y_data_np)
-    print(f"标签 (y) 形状: {y_data_np.shape}")
+    # 1. 将 'labels.csv' 作为以':'分隔的文件加载
+    #    这匹配了您图片中的 "'id': label," 格式
+    label_df = pd.read_csv(y_data_file, sep=':', header=None, names=['id', 'label'])
+    
+    # 2. 清理 'id' 列 (去除空格和单引号)
+    id_col = label_df['id'].str.strip().str.strip("'")
+    
+    # 3. 清理 'label' 列 (去除空格、尾随逗号，并转为整数)
+    label_col = label_df['label'].str.strip().str.rstrip(',').astype(int)
+    
+    # 4. 创建一个 {id -> label} 的查找字典
+    label_map = pd.Series(label_col.values, index=id_col.values).to_dict()
+    
+    print(f"成功加载并解析了 {len(label_map)} 个标签。")
+    
 except FileNotFoundError:
     print(f"错误：找不到文件 '{y_data_file}'。请确保文件在脚本目录中。")
     exit()
+except Exception as e:
+    print(f"错误：解析 '{y_data_file}' 时出错。请确保其格式为 'id': label, (如 '005_S_0602': 0,)")
+    print(f"Pandas 错误: {e}")
+    exit()
 
-# --- 5.1.c 加载 时序特征 (X) ---
+# --- 5.1.c 加载并匹配 时序特征 (X) ---
 X_data_folder = 'tsdatasets' # <-- 已根据您的请求更新
+all_subjects_ts = []
+all_labels_list = []
+
 try:
-    # 获取文件夹中所有.csv 文件，并确保它们按字母顺序排序
-    # 这样 'subject_001.csv' 就会对应 y_data_np
+    # 获取文件夹中所有.csv 文件
     subject_files = sorted([f for f in os.listdir(X_data_folder) if f.endswith('.csv')])
 except FileNotFoundError:
     print(f"错误：找不到文件夹 '{X_data_folder}'。请确保文件夹在脚本目录中。")
     exit()
 
-# 检查文件数量是否与标签数量匹配
-if N_TOTAL_SUBJECTS!= len(subject_files):
-    print(f"警告：标签数量 ({N_TOTAL_SUBJECTS}) 与时序文件数量 ({len(subject_files)}) 不匹配！")
-    
-all_subjects_ts = []   # <-- 已更正
+print(f"正在从 {len(subject_files)} 个CSV文件中加载并匹配时序数据...")
 scaler = StandardScaler()
+files_matched = 0
 
-print(f"正在从 {len(subject_files)} 个CSV文件加载时序数据...")
-for i, filename in enumerate(subject_files):
-    filepath = os.path.join(X_data_folder, filename)
-    # 假设时序.csv 文件没有表头
-    timeseries_data = pd.read_csv(filepath, header=None).values # 形状 (140, 116)
+for filename in subject_files:
+    # 1. 从文件名中提取ID (例如 '129_S_6228' 来自 '129_S_6228_20180220.csv')
+    file_id = '_'.join(filename.split('_')[:3])
     
-    if timeseries_data.shape!= (N_TIME_STEPS, N_NODES):
-         print(f"警告：文件 {filename} 的形状是 {timeseries_data.shape}，"
-               f"但预期是 ({N_TIME_STEPS}, {N_NODES})。")
+    # 2. 在标签字典中查找该ID
+    label = label_map.get(file_id)
     
-    # 按照脚本中的原始逻辑，对每个受试者的时序数据进行标准化
-    timeseries_data_scaled = scaler.fit_transform(timeseries_data)
-    
-    all_subjects_ts.append(timeseries_data_scaled)
+    # 3. 如果找到匹配项，则加载数据
+    if label is not None:
+        files_matched += 1
+        filepath = os.path.join(X_data_folder, filename)
+        timeseries_data = pd.read_csv(filepath, header=None).values # 形状 (140, 116)
+        
+        if timeseries_data.shape!= (N_TIME_STEPS, N_NODES):
+             print(f"  > 警告：文件 {filename} 的形状是 {timeseries_data.shape}，"
+                   f"但预期是 ({N_TIME_STEPS}, {N_NODES})。")
+        
+        # 按照脚本中的原始逻辑，对每个受试者的时序数据进行标准化
+        timeseries_data_scaled = scaler.fit_transform(timeseries_data)
+        
+        all_subjects_ts.append(timeseries_data_scaled)
+        all_labels_list.append(label)
+    else:
+        # 如果在标签字典中找不到ID，则打印警告
+        print(f"  > 警告: 找不到 '{filename}' (提取的ID: {file_id}) 的标签。将跳过此文件。")
 
-# 将列表堆叠成一个 3D Numpy 数组 (N, T, N)
-X_data_np = np.stack(all_subjects_ts, axis=0)
-print(f"特征 (X) 形状: {X_data_np.shape}")
-
+print(f"加载完成。总共匹配了 {files_matched} 个文件和标签。")
 
 # --- 5.1.d 转换为 PyTorch 张量 ---
-print("正在将数据转换为PyTorch张量...")
+if files_matched == 0:
+    print("错误：未找到任何匹配的时序文件和标签。请检查您的ID格式和文件名。")
+    exit()
+    
+# 将匹配的列表转换为Numpy数组
+X_data_np = np.stack(all_subjects_ts, axis=0)
+y_data_np = np.array(all_labels_list)
+
+print(f"最终特征 (X) 形状: {X_data_np.shape}")
+print(f"最终标签 (y) 形状: {y_data_np.shape}")
 
 # 确保邻接矩阵对角线为0 (自环将在归一化函数中添加)
 np.fill_diagonal(A_data_np, 0)
 
+# 将数据转换为PyTorch张量
 X_data_torch = torch.tensor(X_data_np, dtype=torch.float32)
 y_data_torch = torch.tensor(y_data_np, dtype=torch.long)
 A_data_torch = torch.tensor(A_data_np, dtype=torch.float32)
@@ -337,7 +370,7 @@ A_data_torch = torch.tensor(A_data_np, dtype=torch.float32)
 
 # --- 5.1.1 邻接矩阵预处理 ---
 # 这是一个关键优化：
-# 我们在所有折（fold）和epoch之外计算一次 A_hat [22, 27]
+# 我们在所有折（fold）和epoch之外计算一次 A_hat [27, 28]
 A_hat = normalize_adjacency_matrix(A_data_torch)
 A_hat = A_hat.to(device)  # 将 A_hat 一次性传输到GPU
 print("邻接矩阵已归一化并发送到GPU。")
@@ -345,8 +378,15 @@ print("邻接矩阵已归一化并发送到GPU。")
 # --- 5.1.2 类别不平衡处理  ---
 # 计算类别权重以用于损失函数 
 class_counts = torch.bincount(y_data_torch)
-class_weights = 1. / class_counts.float()
-class_weights = class_weights / torch.sum(class_weights) # 归一化
+# 防止某个类别在数据子集中不存在（例如，在非常小的数据集中）
+if len(class_counts) < N_CLASSES:
+    # 如果缺少类别，则使用临时权重1，但这表明数据/分割有问题
+    print(f"警告：标签数据只包含 {len(class_counts)} 个类别，但预期有 {N_CLASSES} 个。")
+    class_weights = torch.ones(N_CLASSES, device=device)
+else:
+    class_weights = 1. / class_counts.float()
+    class_weights = class_weights / torch.sum(class_weights) # 归一化
+
 class_weights = class_weights.to(device) # 发送到GPU
 
 print(f"检测到类别不平衡：{class_counts.tolist()}")
@@ -358,9 +398,9 @@ print(f"\n--- 开始 {K_FOLDS}-折交叉验证... ---")
 skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=RANDOM_SEED)
 
 # 存储每个折的结果
-fold_results = []   # <-- 已更正
+fold_results = []
 # 存储所有折的最佳验证混淆矩阵
-all_fold_best_cm = []  # <-- 已更正
+all_fold_best_cm = []
 
 # 创建完整数据集
 full_dataset = fMRISpatioTemporalDataset(X_data_torch, y_data_torch)
