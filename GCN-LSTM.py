@@ -13,6 +13,8 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import balanced_accuracy_score, confusion_matrix
 from sklearn.preprocessing import StandardScaler
 import time
+import pandas as pd  # <-- 已添加
+import os          # <-- 已添加
 
 # ---------------------------------
 # 第一部分：全局配置与设备设置
@@ -55,7 +57,7 @@ print(f"--- 运行设备: {device} ---")
 def normalize_adjacency_matrix(A):
     """
     计算对称归一化的邻接矩阵 A_hat = D^(-1/2) * (A + I) * D^(-1/2)
-    这是Kipf & Welling (2017) GCN的经典实现 。
+    这是Kipf & Welling (2017) GCN的经典实现 [22, 23]。
     
     参数:
     A (torch.Tensor): 邻接矩阵 (N, N)
@@ -88,8 +90,8 @@ def normalize_adjacency_matrix(A):
 class GCN_LSTM_Classifier(nn.Module):
     """
     GCN-LSTM 时空分类器
-    该模型首先在每个时间点上应用GCN提取空间特征，
-    然后使用LSTM学习这些空间特征随时间演变的模式。
+    该模型首先在每个时间点上应用GCN提取空间特征 ，
+    然后使用LSTM学习这些空间特征随时间演变的模式 [24, 1, 25]。
     """
     def __init__(self, in_features, gcn_hidden, lstm_hidden, num_lstm_layers, n_classes, dropout):
         super(GCN_LSTM_Classifier, self).__init__()
@@ -101,7 +103,7 @@ class GCN_LSTM_Classifier(nn.Module):
         
         # 3.2.1 GCN层：
         # 我们将GCN实现为 (A_hat @ X @ W)
-        # nn.Linear(in_features, gcn_hidden) 实现了 (X @ W) 部分 
+        # nn.Linear(in_features, gcn_hidden) 实现了 (X @ W) 部分 [26]
         # 'in_features' 在此为1，因为每个节点在每个时间点的输入是一个标量。
         self.gcn_layer = nn.Linear(in_features, gcn_hidden)
         
@@ -208,8 +210,8 @@ def train_epoch(model, loader, criterion, optimizer, adj_hat, device):
     """ 单个epoch的训练循环 """
     model.train()  # 设置为训练模式 
     running_loss = 0.0
-    all_preds =
-    all_labels =
+    all_preds = []   # <-- 已更正
+    all_labels = []  # <-- 已更正
 
     for X_batch, y_batch in loader:
         X_batch, y_batch = X_batch.to(device), y_batch.to(device)
@@ -238,8 +240,8 @@ def validate_epoch(model, loader, criterion, adj_hat, device):
     """ 单个epoch的验证循环 """
     model.eval()  # 设置为评估模式 
     running_loss = 0.0
-    all_preds =
-    all_labels =
+    all_preds = []   # <-- 已更正
+    all_labels = []  # <-- 已更正
 
     with torch.no_grad():  # 禁用梯度计算
         for X_batch, y_batch in loader:
@@ -260,42 +262,82 @@ def validate_epoch(model, loader, criterion, adj_hat, device):
     return epoch_loss, epoch_acc, all_labels, all_preds
 
 # --- 5.1 加载和准备数据 ---
-print("\n--- 正在加载和准备数据... ---")
+print("\n--- 正在加载和准备数据 (CSV)... ---")
 
-#!!! 注意：此处使用占位符（伪）数据。
-#!!! 您必须在此处替换为您自己的数据加载逻辑。
+# --- 5.1.a 加载 邻接矩阵 (A) ---
+A_data_file = 'FC.csv'  # <-- 已根据您的请求更新
+# 假设 FC.csv 没有表头
+try:
+    A_data_np = pd.read_csv(A_data_file, header=None).values
+    print(f"邻接 (A) 形状: {A_data_np.shape}")
+    if A_data_np.shape!= (N_NODES, N_NODES):
+        print(f"警告：邻接矩阵形状 {A_data_np.shape} 与 N_NODES={N_NODES} 不匹配。")
+except FileNotFoundError:
+    print(f"错误：找不到文件 '{A_data_file}'。请确保文件在脚本目录中。")
+    exit()
 
-# 模拟  中的不平衡 
-N_SUBJECTS_C0 = 483  # 健康组
-N_SUBJECTS_C1 = 307  # EMCI组
-N_TOTAL_SUBJECTS = N_SUBJECTS_C0 + N_SUBJECTS_C1
+# --- 5.1.b 加载 标签 (y) ---
+y_data_file = 'labels.csv' # <-- 已根据您的请求更新
+# 假设 labels.csv 有一个表头 (例如 'label')
+try:
+    y_data_np = pd.read_csv(y_data_file).values.ravel() #.ravel() 将 (N, 1) 转换为 (N,)
+    N_TOTAL_SUBJECTS = len(y_data_np)
+    print(f"标签 (y) 形状: {y_data_np.shape}")
+except FileNotFoundError:
+    print(f"错误：找不到文件 '{y_data_file}'。请确保文件在脚本目录中。")
+    exit()
 
-# X_data：(总样本数, 140, 116)
-X_data_np = np.random.randn(N_TOTAL_SUBJECTS, N_TIME_STEPS, N_NODES)
-# 对每个节点的时序数据进行标准化 (Standard Scaling)
+# --- 5.1.c 加载 时序特征 (X) ---
+X_data_folder = 'tsdatasets' # <-- 已根据您的请求更新
+try:
+    # 获取文件夹中所有.csv 文件，并确保它们按字母顺序排序
+    # 这样 'subject_001.csv' 就会对应 y_data_np
+    subject_files = sorted([f for f in os.listdir(X_data_folder) if f.endswith('.csv')])
+except FileNotFoundError:
+    print(f"错误：找不到文件夹 '{X_data_folder}'。请确保文件夹在脚本目录中。")
+    exit()
+
+# 检查文件数量是否与标签数量匹配
+if N_TOTAL_SUBJECTS!= len(subject_files):
+    print(f"警告：标签数量 ({N_TOTAL_SUBJECTS}) 与时序文件数量 ({len(subject_files)}) 不匹配！")
+    
+all_subjects_ts = []   # <-- 已更正
 scaler = StandardScaler()
-for i in range(N_TOTAL_SUBJECTS):
-    X_data_np[i, :, :] = scaler.fit_transform(X_data_np[i, :, :])
 
-# y_data：(总样本数,)
-y_data_np = np.concatenate()
+print(f"正在从 {len(subject_files)} 个CSV文件加载时序数据...")
+for i, filename in enumerate(subject_files):
+    filepath = os.path.join(X_data_folder, filename)
+    # 假设时序.csv 文件没有表头
+    timeseries_data = pd.read_csv(filepath, header=None).values # 形状 (140, 116)
+    
+    if timeseries_data.shape!= (N_TIME_STEPS, N_NODES):
+         print(f"警告：文件 {filename} 的形状是 {timeseries_data.shape}，"
+               f"但预期是 ({N_TIME_STEPS}, {N_NODES})。")
+    
+    # 按照脚本中的原始逻辑，对每个受试者的时序数据进行标准化
+    timeseries_data_scaled = scaler.fit_transform(timeseries_data)
+    
+    all_subjects_ts.append(timeseries_data_scaled)
 
-# A_data：(116, 116)
-# 这是一个 *必须* 替换的占位符。
-# 您应该加载您的116x116功能连接（FC）矩阵。
-# 如果您有 *每个受试者* 的FC矩阵，标准做法是计算一个 *平均* FC矩阵 。
-A_data_np = np.random.rand(N_NODES, N_NODES)
-A_data_np = (A_data_np + A_data_np.T) / 2  # 确保对称性
-np.fill_diagonal(A_data_np, 0) # GCN的A矩阵对角线通常为0（I将在归一化函数中添加）
+# 将列表堆叠成一个 3D Numpy 数组 (N, T, N)
+X_data_np = np.stack(all_subjects_ts, axis=0)
+print(f"特征 (X) 形状: {X_data_np.shape}")
 
-# 将数据转换为PyTorch张量
+
+# --- 5.1.d 转换为 PyTorch 张量 ---
+print("正在将数据转换为PyTorch张量...")
+
+# 确保邻接矩阵对角线为0 (自环将在归一化函数中添加)
+np.fill_diagonal(A_data_np, 0)
+
 X_data_torch = torch.tensor(X_data_np, dtype=torch.float32)
 y_data_torch = torch.tensor(y_data_np, dtype=torch.long)
 A_data_torch = torch.tensor(A_data_np, dtype=torch.float32)
 
+
 # --- 5.1.1 邻接矩阵预处理 ---
 # 这是一个关键优化：
-# 我们在所有折（fold）和epoch之外计算一次 A_hat 
+# 我们在所有折（fold）和epoch之外计算一次 A_hat [22, 27]
 A_hat = normalize_adjacency_matrix(A_data_torch)
 A_hat = A_hat.to(device)  # 将 A_hat 一次性传输到GPU
 print("邻接矩阵已归一化并发送到GPU。")
@@ -316,9 +358,9 @@ print(f"\n--- 开始 {K_FOLDS}-折交叉验证... ---")
 skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=RANDOM_SEED)
 
 # 存储每个折的结果
-fold_results =
+fold_results = []   # <-- 已更正
 # 存储所有折的最佳验证混淆矩阵
-all_fold_best_cm =
+all_fold_best_cm = []  # <-- 已更正
 
 # 创建完整数据集
 full_dataset = fMRISpatioTemporalDataset(X_data_torch, y_data_torch)
