@@ -373,7 +373,7 @@ A_data_torch = torch.tensor(A_data_np, dtype=torch.float32)
 # 我们在所有折（fold）和epoch之外计算一次 A_hat [27, 28]
 A_hat = normalize_adjacency_matrix(A_data_torch)
 A_hat = A_hat.to(device)  # 将 A_hat 一次性传输到GPU
-print("邻接矩阵已归一化并发送到GPU。")
+print("邻接矩阵已归一化并发送到CPU/GPU。")
 
 # --- 5.1.2 类别不平衡处理  ---
 # 计算类别权重以用于损失函数 
